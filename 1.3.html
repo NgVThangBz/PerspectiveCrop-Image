@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Perspective Crop Pro - Power v42</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #2c3e50; color: white; margin: 0; padding: 0; overflow-y: auto; }
+        
+        #workspace { position: relative; width: 95vw; height: 65vh; margin: 10px auto; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: none; touch-action: none; }
+        
+        .controls { 
+            margin: 10px auto; padding: 15px; background: #34495e; border-radius: 8px; 
+            display: block; width: fit-content; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        .ratio-group { display: inline-block; border-left: 1px solid #555; padding-left: 15px; margin-left: 10px; }
+        .ratio-input { width: 50px; padding: 5px; border-radius: 4px; border: none; text-align: center; }
+
+        #preview-window { position: relative; width: 95vw; height: 75vh; margin: 10px auto; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: none; touch-action: none; }
+        
+        .container { position: absolute; transform-origin: 0 0; z-index: 5; }
+        canvas { display: block; background: #000; }
+        
+        /* EDIT OVERLAY */
+        #svgOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; overflow: visible; }
+        #maskPolygon { fill: rgba(0, 255, 100, 0.1); stroke: #00ff64; stroke-width: 1.7; pointer-events: auto; cursor: move; vector-effect: non-scaling-stroke; }
+        .grid-line { stroke: rgba(0, 255, 100, 0.4); stroke-width: 1.3; vector-effect: non-scaling-stroke; pointer-events: none; }
+        
+        .dot { position: absolute; width: 24px; height: 24px; background: rgba(255, 255, 255, 0.4); border: 2px solid #00ff64; border-radius: 50%; transform: translate(-50%, -50%); cursor: move; z-index: 100; touch-action: none; transition: border-color 0.2s; }
+        .dot:hover { border-color: #ffffff !important; background: rgba(255, 255, 255, 0.7); }
+
+        /* PREVIEW LINES */
+        .guide-v, .guide-h { position: absolute; z-index: 999; pointer-events: auto; background: transparent; touch-action: none; }
+        .guide-v { width: 30px; top: 0; bottom: 0; cursor: col-resize; }
+        .guide-v::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; background: #0088ff; box-shadow: 0 0 8px rgba(0, 136, 255, 0.8); transform: translateX(-50%); transition: all 0.2s; }
+        .guide-h { height: 30px; left: 0; right: 0; cursor: row-resize; }
+        .guide-h::after { content: ""; position: absolute; top: 50%; left: 0; right: 0; height: 2px; background: #0088ff; box-shadow: 0 0 8px rgba(0, 136, 255, 0.8); transform: translateY(-50%); transition: all 0.2s; }
+        .guide-v:hover::after { width: 3px; background: #55afff; }
+        .guide-h:hover::after { height: 3px; background: #55afff; }
+
+        /* RULER */
+        .ruler { position: absolute; background: #111; color: #00ff64; font-size: 9px; z-index: 50; pointer-events: none; }
+        .ruler-h { top: 0; left: 0; right: 0; height: 25px; border-bottom: 1px solid #444; }
+        .ruler-v { top: 0; left: 0; bottom: 0; width: 25px; border-right: 1px solid #444; }
+
+        button { padding: 10px 15px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; margin: 2px; transition: opacity 0.2s; }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-process { background: #2ecc71; color: white; }
+        .btn-download { background: #f1c40f; color: #000; display: none; }
+        .btn-history { background: #95a5a6; color: white; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+    <div id="workspace">
+        <div id="container-edit" class="container">
+            <canvas id="canvasInput"></canvas>
+            <svg id="svgOverlay"><polygon id="maskPolygon" /><g id="gridLines"></g></svg>
+            <div id="p0" class="dot"></div><div id="p1" class="dot"></div>
+            <div id="p2" class="dot"></div><div id="p3" class="dot"></div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <input type="file" id="upload" accept="image/*">
+        
+        <button id="btnUndo" class="btn-history" onclick="undo()" title="Ctrl+Z">↩ Undo</button>
+        <button id="btnRedo" class="btn-history" onclick="redo()" title="Ctrl+Y">↪ Redo</button>
+
+        <label style="cursor:pointer; margin-left: 10px; color: #2ecc71;">
+            <input type="checkbox" id="freeGrid"> Lưới tự do
+        </label>
+
+        <div class="ratio-group">
+            Tỷ lệ: 
+            <input type="number" id="ratioW" class="ratio-input" placeholder="W"> x 
+            <input type="number" id="ratioH" class="ratio-input" placeholder="H">
+            <small>(cm)</small>
+        </div>
+
+        <button id="btnProcess" class="btn-process" onclick="processImage()">Trải thẳng & Preview ↓</button>
+        <button id="btnDownload" class="btn-download" onclick="downloadJPG()">Tải JPG</button>
+    </div>
+
+    <div id="preview-window">
+        <div class="ruler ruler-h" id="rulerH"></div>
+        <div class="ruler ruler-v" id="rulerV"></div>
+        <div id="container-preview" class="container">
+            <canvas id="canvasOutput"></canvas>
+        </div>
+        <div id="guideV" class="guide-v"></div>
+        <div id="guideH" class="guide-h"></div>
+    </div>
+
+    <script async src="https://docs.opencv.org/4.5.4/opencv.js" onload="onOpenCvReady()"></script>
+    <script>
+        const el = id => document.getElementById(id);
+        const editWs = el('workspace'), prevWs = el('preview-window');
+        const contEdit = el('container-edit'), contPrev = el('container-preview');
+        const dots = [el('p0'), el('p1'), el('p2'), el('p3')];
+        const PIXELS_PER_CM = 37.795;
+
+        let img = new Image(), isCvReady = false;
+        let eScale = 1, eX = 0, eY = 0;
+        let pScale = 1, pX = 0, pY = 0;
+        let realPoints = [], gridOffsetX = 0, gridOffsetY = 0;
+        let gvPct = 50, ghPct = 50; 
+        let activeHandler = null;
+        let startMouseX, startMouseY, startObjX, startObjY;
+
+        // --- HỆ THỐNG HISTORY ---
+        let history = [];
+        let historyStep = -1;
+
+        function saveState() {
+            const state = JSON.stringify({
+                pts: realPoints,
+                offX: gridOffsetX,
+                offY: gridOffsetY
+            });
+            if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1);
+            history.push(state);
+            if (history.length > 30) history.shift();
+            else historyStep++;
+            updateHistoryButtons();
+        }
+
+        function undo() {
+            if (historyStep > 0) {
+                historyStep--;
+                applyState(JSON.parse(history[historyStep]));
+            }
+        }
+
+        function redo() {
+            if (historyStep < history.length - 1) {
+                historyStep++;
+                applyState(JSON.parse(history[historyStep]));
+            }
+        }
+
+        function applyState(state) {
+            realPoints = state.pts;
+            gridOffsetX = state.offX;
+            gridOffsetY = state.offY;
+            updateEditUI();
+            updateHistoryButtons();
+        }
+
+        function updateHistoryButtons() {
+            el('btnUndo').disabled = (historyStep <= 0);
+            el('btnRedo').disabled = (historyStep >= history.length - 1);
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
+            if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+        });
+
+        // --- CORE LOGIC ---
+        function onOpenCvReady() { isCvReady = true; }
+
+        el('upload').onchange = (e) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                img.onload = () => {
+                    editWs.style.display = 'block';
+                    const cvIn = el('canvasInput');
+                    cvIn.width = img.width; cvIn.height = img.height;
+                    cvIn.getContext('2d').drawImage(img, 0, 0);
+                    realPoints = [{x:0, y:0}, {x:img.width, y:0}, {x:img.width, y:img.height}, {x:0, y:img.height}];
+                    eScale = Math.min(editWs.clientWidth/img.width, editWs.clientHeight/img.height)*0.8;
+                    eX = (editWs.clientWidth - img.width*eScale)/2; eY = (editWs.clientHeight - img.height*eScale)/2;
+                    history = []; historyStep = -1; // Reset history cho ảnh mới
+                    saveState();
+                    updateEditUI();
+                };
+                img.src = ev.target.result;
+            };
+            reader.readAsDataURL(e.target.files[0]);
+        };
+
+        function updateEditUI() {
+            contEdit.style.transform = `translate(${eX}px, ${eY}px) scale(${eScale})`;
+            dots.forEach((d, i) => { 
+                d.style.left = realPoints[i].x + 'px'; d.style.top = realPoints[i].y + 'px'; 
+            });
+            el('maskPolygon').setAttribute('points', realPoints.map(pt => `${pt.x},${pt.y}`).join(' '));
+            
+            let gridHtml = '';
+            const lerp = (p1, p2, t) => ({ x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t });
+            const offX = gridOffsetX % 0.1, offY = gridOffsetY % 0.1;
+
+            for(let i = -1; i <= 11; i++) {
+                const step = i / 10;
+                const rx = step + offX;
+                if(rx >= 0 && rx <= 1) {
+                    const t = lerp(realPoints[0], realPoints[1], rx), b = lerp(realPoints[3], realPoints[2], rx);
+                    gridHtml += `<line class="grid-line" x1="${t.x}" y1="${t.y}" x2="${b.x}" y2="${b.y}" />`;
+                }
+                const ry = step + offY;
+                if(ry >= 0 && ry <= 1) {
+                    const l = lerp(realPoints[0], realPoints[3], ry), r_ln = lerp(realPoints[1], realPoints[2], ry);
+                    gridHtml += `<line class="grid-line" x1="${l.x}" y1="${l.y}" x2="${r_ln.x}" y2="${r_ln.y}" />`;
+                }
+            }
+            el('gridLines').innerHTML = gridHtml;
+        }
+
+        const handleDown = (e, type) => {
+            e.preventDefault(); activeHandler = type;
+            startMouseX = e.clientX; startMouseY = e.clientY;
+            if (typeof type === 'number') { startObjX = realPoints[type].x; startObjY = realPoints[type].y; }
+            else if (type === 'freeGrid') { startObjX = gridOffsetX; startObjY = gridOffsetY; }
+            else if (type === 'gv') { startObjX = gvPct; el('guideV').setPointerCapture(e.pointerId); }
+            else if (type === 'gh') { startObjY = ghPct; el('guideH').setPointerCapture(e.pointerId); }
+            else if (type === 'panEdit') { startObjX = eX; startObjY = eY; }
+            else if (type === 'panPrev') { startObjX = pX; startObjY = pY; }
+        };
+
+        window.onpointermove = (e) => {
+            if (activeHandler === null) return;
+            const dx = e.clientX - startMouseX, dy = e.clientY - startMouseY;
+            if (typeof activeHandler === 'number') {
+                realPoints[activeHandler].x = startObjX + (dx/eScale); realPoints[activeHandler].y = startObjY + (dy/eScale);
+                updateEditUI();
+            } else if (activeHandler === 'freeGrid') {
+                gridOffsetX = startObjX + (dx / eScale / img.width); gridOffsetY = startObjY + (dy / eScale / img.height);
+                updateEditUI();
+            } else if (activeHandler === 'gv') {
+                gvPct = Math.max(0, Math.min(100, startObjX + (dx / (el('canvasOutput').width * pScale)) * 100)); updatePrevUI();
+            } else if (activeHandler === 'gh') {
+                ghPct = Math.max(0, Math.min(100, startObjY + (dy / (el('canvasOutput').height * pScale)) * 100)); updatePrevUI();
+            } else if (activeHandler === 'panEdit') { eX = startObjX + dx; eY = startObjY + dy; updateEditUI(); }
+            else if (activeHandler === 'panPrev') { pX = startObjX + dx; pY = startObjY + dy; updatePrevUI(); }
+        };
+
+        window.onpointerup = (e) => {
+            if (activeHandler === 'gv') el('guideV').releasePointerCapture(e.pointerId);
+            if (activeHandler === 'gh') el('guideH').releasePointerCapture(e.pointerId);
+            // Lưu trạng thái vào history sau khi kết thúc thao tác edit
+            if (activeHandler !== null && activeHandler !== 'panEdit' && activeHandler !== 'panPrev' && activeHandler !== 'gv' && activeHandler !== 'gh') {
+                saveState();
+            }
+            activeHandler = null;
+        };
+
+        dots.forEach((d, i) => d.onpointerdown = (e) => handleDown(e, i));
+        el('maskPolygon').onpointerdown = (e) => { if(el('freeGrid').checked) handleDown(e, 'freeGrid'); };
+        el('guideV').onpointerdown = (e) => handleDown(e, 'gv');
+        el('guideH').onpointerdown = (e) => handleDown(e, 'gh');
+        editWs.onmousedown = (e) => { if(e.button === 1) handleDown(e, 'panEdit'); };
+        prevWs.onmousedown = (e) => { if(e.button === 1) handleDown(e, 'panPrev'); };
+
+        function updatePrevUI() {
+            contPrev.style.transform = `translate(${pX}px, ${pY}px) scale(${pScale})`;
+            const cvOut = el('canvasOutput');
+            if (!cvOut.width) return;
+            el('guideV').style.left = (pX + (cvOut.width * pScale * gvPct / 100) - 15) + 'px';
+            el('guideH').style.top = (pY + (cvOut.height * pScale * ghPct / 100) - 15) + 'px';
+            drawRulersCM();
+        }
+
+        editWs.onwheel = (e) => {
+            e.preventDefault(); const delta = e.deltaY > 0 ? 0.9 : 1.111;
+            const r = editWs.getBoundingClientRect(); const mX = e.clientX - r.left, mY = e.clientY - r.top;
+            eX = mX - (mX - eX) * delta; eY = mY - (mY - eY) * delta; eScale *= delta; updateEditUI();
+        };
+        prevWs.onwheel = (e) => {
+            e.preventDefault(); const delta = e.deltaY > 0 ? 0.9 : 1.111;
+            const r = prevWs.getBoundingClientRect(); const mX = e.clientX - r.left, mY = e.clientY - r.top;
+            pX = mX - (mX - pX) * delta; pY = mY - (mY - pY) * delta; pScale *= delta; updatePrevUI();
+        };
+
+        function drawRulersCM() {
+            const cvOut = el('canvasOutput');
+            let hHtml = '', vHtml = ''; const step = PIXELS_PER_CM * pScale;
+            for(let cm=0; cm <= (cvOut.width/PIXELS_PER_CM); cm++){
+                let l = cm * step + pX;
+                if(l >= 0 && l < prevWs.clientWidth) hHtml += `<div style="position:absolute; left:${l}px; border-left:1px solid #00ff64; height:15px; top:10px;"><span style="margin-left:2px">${cm}</span></div>`;
+            }
+            for(let cm=0; cm <= (cvOut.height/PIXELS_PER_CM); cm++){
+                let t = cm * step + pY;
+                if(t >= 0 && t < prevWs.clientHeight) vHtml += `<div style="position:absolute; top:${t}px; border-top:1px solid #00ff64; width:15px; left:10px;"><span style="display:block; transform:rotate(-90deg); margin-left:10px;">${cm}</span></div>`;
+            }
+            el('rulerH').innerHTML = hHtml; el('rulerV').innerHTML = vHtml;
+        }
+
+        function processImage() {
+            const src = cv.imread(el('canvasInput'));
+            const p = realPoints;
+            
+            // Logic Tỷ lệ Custom
+            let w, h;
+            const rw = parseFloat(el('ratioW').value);
+            const rh = parseFloat(el('ratioH').value);
+
+            if (rw > 0 && rh > 0) {
+                // Nếu có nhập tỷ lệ, lấy giá trị pixel dựa trên CM
+                w = rw * PIXELS_PER_CM;
+                h = rh * PIXELS_PER_CM;
+            } else {
+                // Nếu không, tự tính theo kích thước trung bình các cạnh
+                w = Math.sqrt(Math.hypot(p[1].x-p[0].x, p[1].y-p[0].y) * Math.hypot(p[2].x-p[3].x, p[2].y-p[3].y));
+                h = Math.sqrt(Math.hypot(p[3].x-p[0].x, p[3].y-p[0].y) * Math.hypot(p[2].x-p[1].x, p[2].y-p[1].y));
+            }
+
+            const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [p[0].x, p[0].y, p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y]);
+            const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, w, 0, w, h, 0, h]);
+            const M = cv.getPerspectiveTransform(srcTri, dstTri), dst = new cv.Mat();
+            cv.warpPerspective(src, dst, M, new cv.Size(w, h), cv.INTER_LINEAR);
+            cv.imshow('canvasOutput', dst);
+            
+            prevWs.style.display = 'block';
+            pScale = Math.min((prevWs.clientWidth-100)/w, (prevWs.clientHeight-100)/h);
+            pX = (prevWs.clientWidth - w*pScale)/2; pY = (prevWs.clientHeight - h*pScale)/2;
+            updatePrevUI();
+            el('btnDownload').style.display = 'inline-block';
+            setTimeout(() => prevWs.scrollIntoView({ behavior: 'smooth' }), 300);
+            [src, dst, M, srcTri, dstTri].forEach(m => m.delete());
+        }
+
+        function downloadJPG() {
+            const link = document.createElement('a'); link.download = 'straight.jpg';
+            link.href = el('canvasOutput').toDataURL('image/jpeg', 0.95); link.click();
+        }
+    </script>
+</body>
+</html>
