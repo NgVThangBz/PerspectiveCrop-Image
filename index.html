@@ -4,14 +4,20 @@
     <meta charset="UTF-8">
     <title>Perspective Crop Pro - Power v42</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #2c3e50; color: white; margin: 0; padding: 0; overflow-y: auto; }
-        
-        #workspace { position: relative; width: 95vw; height: 65vh; margin: 10px auto; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: none; touch-action: none; }
+        body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #2c3e50; color: white; margin: 0; padding: 0; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
         
         .controls { 
-            margin: 10px auto; padding: 15px; background: #34495e; border-radius: 8px; 
-            display: block; width: fit-content; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            margin: 0; padding: 12px; background: #34495e;
+            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+            min-height: 54px; flex: 0 0 auto; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
         }
+        .controls-left, .controls-right { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+        .controls-right { margin-left: auto; justify-content: flex-end;
+        }
+        #mainLayout { display: flex; width: 100vw; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+        #workspace { position: relative; flex: 1 1 50%; min-width: 240px; height: 100%; margin: 0; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: block; touch-action: none; }
+        #splitter { flex: 0 0 8px; background: #34495e; border-left: 1px solid #607d8b; border-right: 1px solid #607d8b; cursor: col-resize; touch-action: none; }
+        #splitter:hover { background: #4d6678; }
 
         .ratio-group { display: inline-block; border-left: 1px solid #555; padding-left: 15px; margin-left: 10px; }
         .ratio-input { width: 50px; padding: 5px; border-radius: 4px; border: none; text-align: center; }
@@ -21,7 +27,7 @@
         .adjust-group { display: inline-flex; align-items: center; gap: 6px; border-left: 1px solid #555; padding-left: 12px; margin-left: 10px; font-size: 12px; }
         .adjust-group input[type="range"] { width: 90px; }
 
-        #preview-window { position: relative; width: 95vw; height: 75vh; margin: 10px auto; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: none; touch-action: none; }
+        #preview-window { position: relative; flex: 1 1 50%; min-width: 240px; height: 100%; margin: 0; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: block; touch-action: none; }
         
         .container { position: absolute; transform-origin: 0 0; z-index: 5; }
         canvas { display: block; background: #000; }
@@ -55,12 +61,44 @@
         button { padding: 10px 15px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; margin: 2px; transition: opacity 0.2s; }
         button:disabled { opacity: 0.3; cursor: not-allowed; }
         .btn-process { background: #2ecc71; color: white; }
-        .btn-download { background: #f1c40f; color: #000; display: none; }
+        .btn-download { background: #f1c40f; color: #000; }
         .btn-history { background: #95a5a6; color: white; font-size: 12px; }
     </style>
 </head>
 <body>
 
+    <div class="controls">
+        <div class="controls-left">
+            <button id="btnUndo" class="btn-history" onclick="undo()" title="Ctrl+Z">↩ Undo</button>
+            <button id="btnRedo" class="btn-history" onclick="redo()" title="Ctrl+Y">↪ Redo</button>
+
+            <div class="mode-group">
+                <button id="btnModeQuad" class="mode-btn active" onclick="setPointMode('quad')">Tứ giác</button>
+                <button id="btnModePick" class="mode-btn" onclick="setPointMode('pick')">Pick điểm</button>
+            </div>
+            <button class="btn-history" onclick="resetViewAndAdjustments()">Reset</button>
+
+            <div class="ratio-group">
+                Tỷ lệ:
+                <input type="number" id="ratioW" class="ratio-input" placeholder="W"> x
+                <input type="number" id="ratioH" class="ratio-input" placeholder="H">
+                <small>(cm)</small>
+            </div>
+
+            <div class="adjust-group">
+                Sáng <input id="brightnessSlider" type="range" min="-100" max="100" value="0" oninput="applyOutputAdjustments()">
+                Tương phản <input id="contrastSlider" type="range" min="-100" max="100" value="0" oninput="applyOutputAdjustments()">
+            </div>
+        </div>
+        <div class="controls-right">
+            <input type="file" id="upload" accept="image/*">
+            <button id="btnProcess" class="btn-process" onclick="processImage()">Trải thẳng & Preview</button>
+            <button id="btnDownload" class="btn-download" onclick="downloadJPG()" disabled>Tải JPG</button>
+        </div>
+    </div>
+
+
+    <div id="mainLayout">
     <div id="workspace">
         <div id="container-edit" class="container">
             <canvas id="canvasInput"></canvas>
@@ -70,34 +108,7 @@
         </div>
         <canvas id="magnifier" width="70" height="70"></canvas>
     </div>
-
-    <div class="controls">
-        <input type="file" id="upload" accept="image/*">
-        
-        <button id="btnUndo" class="btn-history" onclick="undo()" title="Ctrl+Z">↩ Undo</button>
-        <button id="btnRedo" class="btn-history" onclick="redo()" title="Ctrl+Y">↪ Redo</button>
-
-        <div class="mode-group">
-            <button id="btnModeQuad" class="mode-btn active" onclick="setPointMode('quad')">Tứ giác</button>
-            <button id="btnModePick" class="mode-btn" onclick="setPointMode('pick')">Pick điểm</button>
-        </div>
-        <button class="btn-history" onclick="fitEditView()">Reset</button>
-
-        <div class="ratio-group">
-            Tỷ lệ: 
-            <input type="number" id="ratioW" class="ratio-input" placeholder="W"> x 
-            <input type="number" id="ratioH" class="ratio-input" placeholder="H">
-            <small>(cm)</small>
-        </div>
-
-        <button id="btnProcess" class="btn-process" onclick="processImage()">Trải thẳng & Preview ↓</button>
-        <div class="adjust-group">
-            Sáng <input id="brightnessSlider" type="range" min="-100" max="100" value="0" oninput="applyOutputAdjustments()">
-            Tương phản <input id="contrastSlider" type="range" min="-100" max="100" value="0" oninput="applyOutputAdjustments()">
-        </div>
-        <button id="btnDownload" class="btn-download" onclick="downloadJPG()">Tải JPG</button>
-    </div>
-
+        <div id="splitter" title="Kéo để đổi tỷ lệ"></div>
     <div id="preview-window">
         <div class="ruler ruler-h" id="rulerH"></div>
         <div class="ruler ruler-v" id="rulerV"></div>
@@ -107,11 +118,13 @@
         <div id="guideV" class="guide-v"></div>
         <div id="guideH" class="guide-h"></div>
     </div>
+    </div>
 
     <script async src="https://docs.opencv.org/4.5.4/opencv.js" onload="onOpenCvReady()"></script>
     <script>
         const el = id => document.getElementById(id);
         const editWs = el('workspace'), prevWs = el('preview-window');
+        const splitter = el('splitter'), mainLayout = el('mainLayout');
         const contEdit = el('container-edit'), contPrev = el('container-preview');
         const dots = [el('p0'), el('p1'), el('p2'), el('p3')];
         const PIXELS_PER_CM = 37.795;
@@ -180,6 +193,26 @@
             updateEditUI();
         }
 
+        function fitPreviewView() {
+            const cvOut = el('canvasOutput');
+            if (!cvOut.width || !cvOut.height) return;
+            pScale = Math.min((prevWs.clientWidth - 100) / cvOut.width, (prevWs.clientHeight - 100) / cvOut.height);
+            pX = (prevWs.clientWidth - cvOut.width * pScale) / 2;
+            pY = (prevWs.clientHeight - cvOut.height * pScale) / 2;
+            updatePrevUI();
+        }
+
+        function resetOutputAdjustments() {
+            el('brightnessSlider').value = 0;
+            el('contrastSlider').value = 0;
+            applyOutputAdjustments();
+        }
+
+        function resetViewAndAdjustments() {
+            fitEditView();
+            resetOutputAdjustments();
+        }
+
         function defaultQuadPoints() {
             if (!img.width || !img.height) return [];
             return [{x:0, y:0}, {x:img.width, y:0}, {x:img.width, y:img.height}, {x:0, y:img.height}];
@@ -231,14 +264,19 @@
         window.addEventListener('keydown', (e) => {
             const modKey = e.ctrlKey || e.metaKey;
             const key = e.key.toLowerCase();
-            if (modKey && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
-            if (modKey && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
+            const targetTag = (e.target && e.target.tagName || '').toLowerCase();
+            const isTyping = targetTag === 'input' || targetTag === 'textarea' || targetTag === 'select';
+            if (modKey && key === 's') { e.preventDefault(); if (!el('btnDownload').disabled) downloadJPG(); return; }
+            if (modKey && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+            if (modKey && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return; }
+            if (key === 'enter' && (!isTyping || e.target.id === 'upload')) { e.preventDefault(); processImage(); }
         });
 
         // --- CORE LOGIC ---
         function onOpenCvReady() { isCvReady = true; }
 
         el('upload').onchange = (e) => {
+            e.target.blur();
             const file = e.target.files && e.target.files[0];
             if (!file) return;
 
@@ -247,8 +285,8 @@
             reader.onload = (ev) => {
                 img.onload = () => {
                     editWs.style.display = 'block';
-                    prevWs.style.display = 'none';
-                    el('btnDownload').style.display = 'none';
+                    prevWs.style.display = 'block';
+                    el('btnDownload').disabled = true;
                     outputBaseImageData = null;
                     el('brightnessSlider').value = 0;
                     el('contrastSlider').value = 0;
@@ -444,6 +482,29 @@
             drawRulersCM();
         }
 
+        let isResizingPanes = false;
+        splitter.onpointerdown = (e) => {
+            e.preventDefault();
+            isResizingPanes = true;
+            splitter.setPointerCapture(e.pointerId);
+        };
+        splitter.onpointermove = (e) => {
+            if (!isResizingPanes) return;
+            const r = mainLayout.getBoundingClientRect();
+            const pct = Math.max(25, Math.min(75, ((e.clientX - r.left) / r.width) * 100));
+            editWs.style.flexBasis = pct + '%';
+            prevWs.style.flexBasis = (100 - pct) + '%';
+            updateEditUI();
+            updatePrevUI();
+        };
+        splitter.onpointerup = (e) => {
+            if (!isResizingPanes) return;
+            isResizingPanes = false;
+            splitter.releasePointerCapture(e.pointerId);
+            fitEditView();
+            fitPreviewView();
+        };
+
         editWs.onwheel = (e) => {
             e.preventDefault(); const delta = e.deltaY > 0 ? 0.9 : 1.111;
             const r = editWs.getBoundingClientRect(); const mX = e.clientX - r.left, mY = e.clientY - r.top;
@@ -553,8 +614,7 @@
                 pScale = Math.min((prevWs.clientWidth-100)/w, (prevWs.clientHeight-100)/h);
                 pX = (prevWs.clientWidth - w*pScale)/2; pY = (prevWs.clientHeight - h*pScale)/2;
                 updatePrevUI();
-                el('btnDownload').style.display = 'inline-block';
-                setTimeout(() => prevWs.scrollIntoView({ behavior: 'smooth' }), 300);
+                el('btnDownload').disabled = false;
             } catch (err) {
                 console.error(err);
                 alert('Có lỗi khi xử lý ảnh. Vui lòng kiểm tra lại ảnh và vùng chọn.');
