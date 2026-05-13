@@ -18,6 +18,8 @@
         .mode-group { display: inline-flex; gap: 4px; margin-left: 10px; vertical-align: middle; }
         .mode-btn { background: #607d8b; color: white; }
         .mode-btn.active { background: #2ecc71; color: white; }
+        .adjust-group { display: inline-flex; align-items: center; gap: 6px; border-left: 1px solid #555; padding-left: 12px; margin-left: 10px; font-size: 12px; }
+        .adjust-group input[type="range"] { width: 90px; }
 
         #preview-window { position: relative; width: 95vw; height: 75vh; margin: 10px auto; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: none; touch-action: none; }
         
@@ -34,6 +36,7 @@
         
         .dot { position: absolute; width: 24px; height: 24px; background: rgba(255, 255, 255, 0.4); border: 2px solid #00ff64; border-radius: 50%; transform: translate(-50%, -50%); cursor: move; z-index: 100; touch-action: none; transition: border-color 0.2s; }
         .dot:hover { border-color: #ffffff !important; background: rgba(255, 255, 255, 0.7); }
+        #magnifier { position: absolute; width: 70px; height: 70px; z-index: 2000; display: none; pointer-events: none; border: 2px solid #00ff64; border-radius: 50%; background: #000; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
 
         /* PREVIEW LINES */
         .guide-v, .guide-h { position: absolute; z-index: 999; pointer-events: auto; background: transparent; touch-action: none; }
@@ -65,6 +68,7 @@
             <div id="p0" class="dot"></div><div id="p1" class="dot"></div>
             <div id="p2" class="dot"></div><div id="p3" class="dot"></div>
         </div>
+        <canvas id="magnifier" width="70" height="70"></canvas>
     </div>
 
     <div class="controls">
@@ -77,6 +81,7 @@
             <button id="btnModeQuad" class="mode-btn active" onclick="setPointMode('quad')">Tứ giác</button>
             <button id="btnModePick" class="mode-btn" onclick="setPointMode('pick')">Pick điểm</button>
         </div>
+        <button class="btn-history" onclick="fitEditView()">Reset</button>
 
         <div class="ratio-group">
             Tỷ lệ: 
@@ -86,6 +91,10 @@
         </div>
 
         <button id="btnProcess" class="btn-process" onclick="processImage()">Trải thẳng & Preview ↓</button>
+        <div class="adjust-group">
+            Sáng <input id="brightnessSlider" type="range" min="-100" max="100" value="0" oninput="applyOutputAdjustments()">
+            Tương phản <input id="contrastSlider" type="range" min="-100" max="100" value="0" oninput="applyOutputAdjustments()">
+        </div>
         <button id="btnDownload" class="btn-download" onclick="downloadJPG()">Tải JPG</button>
     </div>
 
@@ -118,6 +127,7 @@
         let startPolygonPoints = [];
         let pointerMoved = false;
         let activeEdgeIndex = null;
+        let outputBaseImageData = null;
 
         // --- HỆ THỐNG HISTORY ---
         let history = [];
@@ -160,6 +170,14 @@
         function updateModeButtons() {
             el('btnModeQuad').classList.toggle('active', pointMode === 'quad');
             el('btnModePick').classList.toggle('active', pointMode === 'pick');
+        }
+
+        function fitEditView() {
+            if (!img.width || !img.height) return;
+            eScale = Math.min(editWs.clientWidth / img.width, editWs.clientHeight / img.height) * 0.8;
+            eX = (editWs.clientWidth - img.width * eScale) / 2;
+            eY = (editWs.clientHeight - img.height * eScale) / 2;
+            updateEditUI();
         }
 
         function defaultQuadPoints() {
@@ -231,6 +249,9 @@
                     editWs.style.display = 'block';
                     prevWs.style.display = 'none';
                     el('btnDownload').style.display = 'none';
+                    outputBaseImageData = null;
+                    el('brightnessSlider').value = 0;
+                    el('contrastSlider').value = 0;
 
                     const cvIn = el('canvasInput');
                     cvIn.width = img.width; cvIn.height = img.height;
@@ -321,13 +342,41 @@
             realPoints = nextPoints;
         };
 
+        function updateMagnifier(e, point) {
+            const mag = el('magnifier');
+            const srcCanvas = el('canvasInput');
+            if (!srcCanvas.width || !point) return;
+            const size = mag.width;
+            const sample = 36;
+            const sx = Math.max(0, Math.min(srcCanvas.width - sample, point.x - sample / 2));
+            const sy = Math.max(0, Math.min(srcCanvas.height - sample, point.y - sample / 2));
+            const ctx = mag.getContext('2d');
+            ctx.imageSmoothingEnabled = false;
+            ctx.clearRect(0, 0, size, size);
+            ctx.drawImage(srcCanvas, sx, sy, sample, sample, 0, 0, size, size);
+            ctx.strokeStyle = '#00ff64';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(size / 2, 0); ctx.lineTo(size / 2, size);
+            ctx.moveTo(0, size / 2); ctx.lineTo(size, size / 2);
+            ctx.stroke();
+            const wr = editWs.getBoundingClientRect();
+            mag.style.left = Math.min(editWs.clientWidth - size - 8, Math.max(8, e.clientX - wr.left + 24)) + 'px';
+            mag.style.top = Math.min(editWs.clientHeight - size - 8, Math.max(8, e.clientY - wr.top + 24)) + 'px';
+            mag.style.display = 'block';
+        }
+
+        function hideMagnifier() {
+            el('magnifier').style.display = 'none';
+        }
+
         const handleDown = (e, type) => {
             e.preventDefault();
             pointerMoved = false;
             activeHandler = (typeof type === 'object') ? type.type : type;
             activeEdgeIndex = (typeof type === 'object') ? type.edge : null;
             startMouseX = e.clientX; startMouseY = e.clientY;
-            if (typeof type === 'number') { startObjX = realPoints[type].x; startObjY = realPoints[type].y; }
+            if (typeof type === 'number') { startObjX = realPoints[type].x; startObjY = realPoints[type].y; updateMagnifier(e, realPoints[type]); }
             else if (type === 'gv') { startObjX = gvPct; el('guideV').setPointerCapture(e.pointerId); }
             else if (type === 'gh') { startObjY = ghPct; el('guideH').setPointerCapture(e.pointerId); }
             else if (activeHandler === 'movePolygon' || activeHandler === 'moveEdge') { startPolygonPoints = realPoints.map(pt => ({ x: pt.x, y: pt.y })); }
@@ -342,6 +391,7 @@
             if (typeof activeHandler === 'number') {
                 realPoints[activeHandler].x = startObjX + (dx/eScale); realPoints[activeHandler].y = startObjY + (dy/eScale);
                 updateEditUI();
+                updateMagnifier(e, realPoints[activeHandler]);
             } else if (activeHandler === 'movePolygon') {
                 const moveX = dx / eScale, moveY = dy / eScale;
                 realPoints = startPolygonPoints.map(pt => ({ x: pt.x + moveX, y: pt.y + moveY }));
@@ -368,6 +418,7 @@
             activeHandler = null;
             activeEdgeIndex = null;
             pointerMoved = false;
+            hideMagnifier();
         };
 
         dots.forEach((d, i) => d.onpointerdown = (e) => { if (realPoints[i]) handleDown(e, i); });
@@ -403,6 +454,26 @@
             const r = prevWs.getBoundingClientRect(); const mX = e.clientX - r.left, mY = e.clientY - r.top;
             pX = mX - (mX - pX) * delta; pY = mY - (mY - pY) * delta; pScale *= delta; updatePrevUI();
         };
+
+        function clampColor(value) {
+            return Math.max(0, Math.min(255, value));
+        }
+
+        function applyOutputAdjustments() {
+            const cvOut = el('canvasOutput');
+            if (!outputBaseImageData || !cvOut.width || !cvOut.height) return;
+            const brightness = Number(el('brightnessSlider').value);
+            const contrast = Number(el('contrastSlider').value);
+            const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+            const adjusted = new ImageData(new Uint8ClampedArray(outputBaseImageData.data), outputBaseImageData.width, outputBaseImageData.height);
+            const data = adjusted.data;
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = clampColor(factor * (data[i] - 128) + 128 + brightness);
+                data[i + 1] = clampColor(factor * (data[i + 1] - 128) + 128 + brightness);
+                data[i + 2] = clampColor(factor * (data[i + 2] - 128) + 128 + brightness);
+            }
+            cvOut.getContext('2d').putImageData(adjusted, 0, 0);
+        }
 
         function drawRulersCM() {
             const cvOut = el('canvasOutput');
@@ -475,6 +546,8 @@
                 dst = new cv.Mat();
                 cv.warpPerspective(src, dst, M, new cv.Size(w, h), cv.INTER_LINEAR);
                 cv.imshow('canvasOutput', dst);
+                outputBaseImageData = el('canvasOutput').getContext('2d').getImageData(0, 0, w, h);
+                applyOutputAdjustments();
                 
                 prevWs.style.display = 'block';
                 pScale = Math.min((prevWs.clientWidth-100)/w, (prevWs.clientHeight-100)/h);
