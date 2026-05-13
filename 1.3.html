@@ -15,6 +15,9 @@
 
         .ratio-group { display: inline-block; border-left: 1px solid #555; padding-left: 15px; margin-left: 10px; }
         .ratio-input { width: 50px; padding: 5px; border-radius: 4px; border: none; text-align: center; }
+        .mode-group { display: inline-flex; gap: 4px; margin-left: 10px; vertical-align: middle; }
+        .mode-btn { background: #607d8b; color: white; }
+        .mode-btn.active { background: #2ecc71; color: white; }
 
         #preview-window { position: relative; width: 95vw; height: 75vh; margin: 10px auto; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: none; touch-action: none; }
         
@@ -24,6 +27,9 @@
         /* EDIT OVERLAY */
         #svgOverlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; overflow: visible; }
         #maskPolygon { fill: rgba(0, 255, 100, 0.1); stroke: #00ff64; stroke-width: 1.7; pointer-events: auto; cursor: move; vector-effect: non-scaling-stroke; }
+        #maskPolygon.empty { fill: transparent; stroke: transparent; pointer-events: none; }
+        .edge-hit { stroke: transparent; stroke-width: 18; pointer-events: stroke; cursor: grab; vector-effect: non-scaling-stroke; touch-action: none; }
+        .edge-hit:active { cursor: grabbing; }
         .grid-line { stroke: rgba(0, 255, 100, 0.4); stroke-width: 1.3; vector-effect: non-scaling-stroke; pointer-events: none; }
         
         .dot { position: absolute; width: 24px; height: 24px; background: rgba(255, 255, 255, 0.4); border: 2px solid #00ff64; border-radius: 50%; transform: translate(-50%, -50%); cursor: move; z-index: 100; touch-action: none; transition: border-color 0.2s; }
@@ -55,7 +61,7 @@
     <div id="workspace">
         <div id="container-edit" class="container">
             <canvas id="canvasInput"></canvas>
-            <svg id="svgOverlay"><polygon id="maskPolygon" /><g id="gridLines"></g></svg>
+            <svg id="svgOverlay"><polygon id="maskPolygon" /><g id="edgeHitLines"></g><g id="gridLines"></g></svg>
             <div id="p0" class="dot"></div><div id="p1" class="dot"></div>
             <div id="p2" class="dot"></div><div id="p3" class="dot"></div>
         </div>
@@ -67,9 +73,10 @@
         <button id="btnUndo" class="btn-history" onclick="undo()" title="Ctrl+Z">↩ Undo</button>
         <button id="btnRedo" class="btn-history" onclick="redo()" title="Ctrl+Y">↪ Redo</button>
 
-        <label style="cursor:pointer; margin-left: 10px; color: #2ecc71;">
-            <input type="checkbox" id="freeGrid"> Lưới tự do
-        </label>
+        <div class="mode-group">
+            <button id="btnModeQuad" class="mode-btn active" onclick="setPointMode('quad')">Tứ giác</button>
+            <button id="btnModePick" class="mode-btn" onclick="setPointMode('pick')">Pick điểm</button>
+        </div>
 
         <div class="ratio-group">
             Tỷ lệ: 
@@ -103,10 +110,14 @@
         let img = new Image(), isCvReady = false;
         let eScale = 1, eX = 0, eY = 0;
         let pScale = 1, pX = 0, pY = 0;
-        let realPoints = [], gridOffsetX = 0, gridOffsetY = 0;
+        let realPoints = [];
+        let pointMode = 'quad';
         let gvPct = 50, ghPct = 50; 
         let activeHandler = null;
         let startMouseX, startMouseY, startObjX, startObjY;
+        let startPolygonPoints = [];
+        let pointerMoved = false;
+        let activeEdgeIndex = null;
 
         // --- HỆ THỐNG HISTORY ---
         let history = [];
@@ -115,8 +126,7 @@
         function saveState() {
             const state = JSON.stringify({
                 pts: realPoints,
-                offX: gridOffsetX,
-                offY: gridOffsetY
+                mode: pointMode
             });
             if (historyStep < history.length - 1) history = history.slice(0, historyStep + 1);
             history.push(state);
@@ -140,11 +150,59 @@
         }
 
         function applyState(state) {
-            realPoints = state.pts;
-            gridOffsetX = state.offX;
-            gridOffsetY = state.offY;
+            realPoints = state.pts || [];
+            pointMode = state.mode || pointMode;
+            updateModeButtons();
             updateEditUI();
             updateHistoryButtons();
+        }
+
+        function updateModeButtons() {
+            el('btnModeQuad').classList.toggle('active', pointMode === 'quad');
+            el('btnModePick').classList.toggle('active', pointMode === 'pick');
+        }
+
+        function defaultQuadPoints() {
+            if (!img.width || !img.height) return [];
+            return [{x:0, y:0}, {x:img.width, y:0}, {x:img.width, y:img.height}, {x:0, y:img.height}];
+        }
+
+        function setPointMode(mode) {
+            pointMode = mode;
+            realPoints = (mode === 'quad' && img.width && img.height) ? defaultQuadPoints() : [];
+            saveState();
+            updateModeButtons();
+            updateEditUI();
+        }
+
+        function getImagePointFromEvent(e) {
+            const r = contEdit.getBoundingClientRect();
+            return { x: (e.clientX - r.left) / eScale, y: (e.clientY - r.top) / eScale };
+        }
+
+        function orderQuadPoints(points) {
+            if (points.length !== 4) return points;
+            const pts = points.map(pt => ({ x: pt.x, y: pt.y }));
+            const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+            const byDiff = [...pts].sort((a, b) => (a.x - a.y) - (b.x - b.y));
+            return [
+                bySum[0],
+                byDiff[3],
+                bySum[3],
+                byDiff[0]
+            ];
+        }
+
+        function addPickedPoint(e) {
+            if (pointMode !== 'pick' || realPoints.length >= 4) return;
+            const pt = getImagePointFromEvent(e);
+            realPoints.push({
+                x: Math.max(0, Math.min(img.width, pt.x)),
+                y: Math.max(0, Math.min(img.height, pt.y))
+            });
+            if (realPoints.length === 4) realPoints = orderQuadPoints(realPoints);
+            saveState();
+            updateEditUI();
         }
 
         function updateHistoryButtons() {
@@ -177,12 +235,12 @@
                     const cvIn = el('canvasInput');
                     cvIn.width = img.width; cvIn.height = img.height;
                     cvIn.getContext('2d').drawImage(img, 0, 0);
-                    realPoints = [{x:0, y:0}, {x:img.width, y:0}, {x:img.width, y:img.height}, {x:0, y:img.height}];
-                    gridOffsetX = 0; gridOffsetY = 0;
+                    realPoints = pointMode === 'quad' ? defaultQuadPoints() : [];
                     gvPct = 50; ghPct = 50;
                     eScale = Math.min(editWs.clientWidth/img.width, editWs.clientHeight/img.height)*0.8;
                     eX = (editWs.clientWidth - img.width*eScale)/2; eY = (editWs.clientHeight - img.height*eScale)/2;
                     history = []; historyStep = -1; // Reset history cho ảnh mới
+                    updateModeButtons();
                     saveState();
                     updateEditUI();
                 };
@@ -194,50 +252,102 @@
 
         function updateEditUI() {
             contEdit.style.transform = `translate(${eX}px, ${eY}px) scale(${eScale})`;
-            dots.forEach((d, i) => { 
-                d.style.left = realPoints[i].x + 'px'; d.style.top = realPoints[i].y + 'px'; 
+            dots.forEach((d, i) => {
+                const pt = realPoints[i];
+                d.style.display = pt ? 'block' : 'none';
+                if (pt) { d.style.left = pt.x + 'px'; d.style.top = pt.y + 'px'; }
             });
-            el('maskPolygon').setAttribute('points', realPoints.map(pt => `${pt.x},${pt.y}`).join(' '));
-            
-            let gridHtml = '';
-            const lerp = (p1, p2, t) => ({ x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t });
-            const offX = gridOffsetX % 0.1, offY = gridOffsetY % 0.1;
 
-            for(let i = -1; i <= 11; i++) {
-                const step = i / 10;
-                const rx = step + offX;
-                if(rx >= 0 && rx <= 1) {
-                    const t = lerp(realPoints[0], realPoints[1], rx), b = lerp(realPoints[3], realPoints[2], rx);
-                    gridHtml += `<line class="grid-line" x1="${t.x}" y1="${t.y}" x2="${b.x}" y2="${b.y}" />`;
-                }
-                const ry = step + offY;
-                if(ry >= 0 && ry <= 1) {
-                    const l = lerp(realPoints[0], realPoints[3], ry), r_ln = lerp(realPoints[1], realPoints[2], ry);
-                    gridHtml += `<line class="grid-line" x1="${l.x}" y1="${l.y}" x2="${r_ln.x}" y2="${r_ln.y}" />`;
+            const pointsAttr = realPoints.map(pt => `${pt.x},${pt.y}`).join(' ');
+            el('maskPolygon').setAttribute('points', pointsAttr);
+            el('maskPolygon').classList.toggle('empty', realPoints.length < 3);
+
+            if (realPoints.length === 4) {
+                el('edgeHitLines').innerHTML = realPoints.map((pt, i) => {
+                    const next = realPoints[(i + 1) % realPoints.length];
+                    return `<line class="edge-hit" data-edge="${i}" x1="${pt.x}" y1="${pt.y}" x2="${next.x}" y2="${next.y}" />`;
+                }).join('');
+                el('edgeHitLines').querySelectorAll('.edge-hit').forEach(line => {
+                    line.onpointerdown = (e) => handleDown(e, { type: 'moveEdge', edge: Number(line.dataset.edge) });
+                });
+            } else {
+                el('edgeHitLines').innerHTML = '';
+            }
+
+            let gridHtml = '';
+            if (realPoints.length === 4) {
+                const lerp = (p1, p2, t) => ({ x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t });
+
+                for(let i = -1; i <= 11; i++) {
+                    const step = i / 10;
+                    const rx = step;
+                    if(rx >= 0 && rx <= 1) {
+                        const t = lerp(realPoints[0], realPoints[1], rx), b = lerp(realPoints[3], realPoints[2], rx);
+                        gridHtml += `<line class="grid-line" x1="${t.x}" y1="${t.y}" x2="${b.x}" y2="${b.y}" />`;
+                    }
+                    const ry = step;
+                    if(ry >= 0 && ry <= 1) {
+                        const l = lerp(realPoints[0], realPoints[3], ry), r_ln = lerp(realPoints[1], realPoints[2], ry);
+                        gridHtml += `<line class="grid-line" x1="${l.x}" y1="${l.y}" x2="${r_ln.x}" y2="${r_ln.y}" />`;
+                    }
                 }
             }
             el('gridLines').innerHTML = gridHtml;
         }
 
+        const lineIntersection = (p1, p2, p3, p4) => {
+            const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+            const x3 = p3.x, y3 = p3.y, x4 = p4.x, y4 = p4.y;
+            const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+            if (Math.abs(den) < 0.000001) return null;
+            return {
+                x: ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den,
+                y: ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den
+            };
+        };
+
+        const moveEdgeKeepingDirections = (edgeIndex, moveX, moveY) => {
+            const nextIndex = (edgeIndex + 1) % 4;
+            const prevIndex = (edgeIndex + 3) % 4;
+            const afterIndex = (edgeIndex + 2) % 4;
+            const movedA = { x: startPolygonPoints[edgeIndex].x + moveX, y: startPolygonPoints[edgeIndex].y + moveY };
+            const movedB = { x: startPolygonPoints[nextIndex].x + moveX, y: startPolygonPoints[nextIndex].y + moveY };
+            const newA = lineIntersection(movedA, movedB, startPolygonPoints[prevIndex], startPolygonPoints[edgeIndex]);
+            const newB = lineIntersection(movedA, movedB, startPolygonPoints[nextIndex], startPolygonPoints[afterIndex]);
+            if (!newA || !newB) return;
+            const nextPoints = startPolygonPoints.map(pt => ({ x: pt.x, y: pt.y }));
+            nextPoints[edgeIndex] = newA;
+            nextPoints[nextIndex] = newB;
+            realPoints = nextPoints;
+        };
+
         const handleDown = (e, type) => {
-            e.preventDefault(); activeHandler = type;
+            e.preventDefault();
+            pointerMoved = false;
+            activeHandler = (typeof type === 'object') ? type.type : type;
+            activeEdgeIndex = (typeof type === 'object') ? type.edge : null;
             startMouseX = e.clientX; startMouseY = e.clientY;
             if (typeof type === 'number') { startObjX = realPoints[type].x; startObjY = realPoints[type].y; }
-            else if (type === 'freeGrid') { startObjX = gridOffsetX; startObjY = gridOffsetY; }
             else if (type === 'gv') { startObjX = gvPct; el('guideV').setPointerCapture(e.pointerId); }
             else if (type === 'gh') { startObjY = ghPct; el('guideH').setPointerCapture(e.pointerId); }
-            else if (type === 'panEdit') { startObjX = eX; startObjY = eY; }
+            else if (activeHandler === 'movePolygon' || activeHandler === 'moveEdge') { startPolygonPoints = realPoints.map(pt => ({ x: pt.x, y: pt.y })); }
+            else if (activeHandler === 'panEdit') { startObjX = eX; startObjY = eY; }
             else if (type === 'panPrev') { startObjX = pX; startObjY = pY; }
         };
 
         window.onpointermove = (e) => {
             if (activeHandler === null) return;
             const dx = e.clientX - startMouseX, dy = e.clientY - startMouseY;
+            pointerMoved = pointerMoved || Math.abs(dx) > 3 || Math.abs(dy) > 3;
             if (typeof activeHandler === 'number') {
                 realPoints[activeHandler].x = startObjX + (dx/eScale); realPoints[activeHandler].y = startObjY + (dy/eScale);
                 updateEditUI();
-            } else if (activeHandler === 'freeGrid') {
-                gridOffsetX = startObjX + (dx / eScale / img.width); gridOffsetY = startObjY + (dy / eScale / img.height);
+            } else if (activeHandler === 'movePolygon') {
+                const moveX = dx / eScale, moveY = dy / eScale;
+                realPoints = startPolygonPoints.map(pt => ({ x: pt.x + moveX, y: pt.y + moveY }));
+                updateEditUI();
+            } else if (activeHandler === 'moveEdge') {
+                moveEdgeKeepingDirections(activeEdgeIndex, dx / eScale, dy / eScale);
                 updateEditUI();
             } else if (activeHandler === 'gv') {
                 gvPct = Math.max(0, Math.min(100, startObjX + (dx / (el('canvasOutput').width * pScale)) * 100)); updatePrevUI();
@@ -250,18 +360,28 @@
         window.onpointerup = (e) => {
             if (activeHandler === 'gv') el('guideV').releasePointerCapture(e.pointerId);
             if (activeHandler === 'gh') el('guideH').releasePointerCapture(e.pointerId);
+            if (activeHandler === 'pickCanvas' && !pointerMoved) addPickedPoint(e);
             // Lưu trạng thái vào history sau khi kết thúc thao tác edit
-            if (activeHandler !== null && activeHandler !== 'panEdit' && activeHandler !== 'panPrev' && activeHandler !== 'gv' && activeHandler !== 'gh') {
+            if (activeHandler !== null && activeHandler !== 'pickCanvas' && activeHandler !== 'panEdit' && activeHandler !== 'panPrev' && activeHandler !== 'gv' && activeHandler !== 'gh') {
                 saveState();
             }
             activeHandler = null;
+            activeEdgeIndex = null;
+            pointerMoved = false;
         };
 
-        dots.forEach((d, i) => d.onpointerdown = (e) => handleDown(e, i));
-        el('maskPolygon').onpointerdown = (e) => { if(el('freeGrid').checked) handleDown(e, 'freeGrid'); };
+        dots.forEach((d, i) => d.onpointerdown = (e) => { if (realPoints[i]) handleDown(e, i); });
+        el('maskPolygon').onpointerdown = (e) => { if (pointMode === 'pick' && realPoints.length < 4) handleDown(e, 'pickCanvas'); else if (realPoints.length === 4) handleDown(e, 'movePolygon'); };
         el('guideV').onpointerdown = (e) => handleDown(e, 'gv');
         el('guideH').onpointerdown = (e) => handleDown(e, 'gh');
-        editWs.onpointerdown = (e) => { if (e.button !== 0) return; if (e.target === editWs || e.target === contEdit || e.target.id === 'canvasInput' || e.target.id === 'svgOverlay') handleDown(e, 'panEdit'); };
+        editWs.onpointerdown = (e) => {
+            if (e.button !== 0) return;
+            if (pointMode === 'pick' && realPoints.length < 4 && (e.target === editWs || e.target === contEdit || e.target.id === 'canvasInput' || e.target.id === 'svgOverlay')) {
+                handleDown(e, 'pickCanvas');
+                return;
+            }
+            if (e.target === editWs || e.target === contEdit || e.target.id === 'canvasInput' || e.target.id === 'svgOverlay') handleDown(e, 'panEdit');
+        };
         prevWs.onpointerdown = (e) => { if (e.button !== 0) return; if (e.target === prevWs || e.target === contPrev || e.target.id === 'canvasOutput') handleDown(e, 'panPrev'); };
 
         function updatePrevUI() {
@@ -304,12 +424,18 @@
                 alert('OpenCV chưa tải xong, vui lòng thử lại sau vài giây.');
                 return;
             }
-            if (!cvIn.width || !cvIn.height || realPoints.length !== 4) {
+            if (!cvIn.width || !cvIn.height) {
                 alert('Vui lòng tải ảnh trước khi xử lý.');
                 return;
             }
+            if (realPoints.length !== 4) {
+                alert('Cần đủ 4 điểm polygon trước khi trải ảnh.');
+                return;
+            }
 
-            const p = realPoints;
+            const p = orderQuadPoints(realPoints);
+            realPoints = p;
+            updateEditUI();
             let src, srcTri, dstTri, M, dst;
 
             try {
