@@ -153,31 +153,43 @@
         }
 
         window.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
-            if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+            const modKey = e.ctrlKey || e.metaKey;
+            const key = e.key.toLowerCase();
+            if (modKey && key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+            if (modKey && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
         });
 
         // --- CORE LOGIC ---
         function onOpenCvReady() { isCvReady = true; }
 
         el('upload').onchange = (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (!file) return;
+
             const reader = new FileReader();
+            reader.onerror = () => alert('Không thể đọc file ảnh.');
             reader.onload = (ev) => {
                 img.onload = () => {
                     editWs.style.display = 'block';
+                    prevWs.style.display = 'none';
+                    el('btnDownload').style.display = 'none';
+
                     const cvIn = el('canvasInput');
                     cvIn.width = img.width; cvIn.height = img.height;
                     cvIn.getContext('2d').drawImage(img, 0, 0);
                     realPoints = [{x:0, y:0}, {x:img.width, y:0}, {x:img.width, y:img.height}, {x:0, y:img.height}];
+                    gridOffsetX = 0; gridOffsetY = 0;
+                    gvPct = 50; ghPct = 50;
                     eScale = Math.min(editWs.clientWidth/img.width, editWs.clientHeight/img.height)*0.8;
                     eX = (editWs.clientWidth - img.width*eScale)/2; eY = (editWs.clientHeight - img.height*eScale)/2;
                     history = []; historyStep = -1; // Reset history cho ảnh mới
                     saveState();
                     updateEditUI();
                 };
+                img.onerror = () => alert('File đã chọn không phải ảnh hợp lệ hoặc không thể tải ảnh.');
                 img.src = ev.target.result;
             };
-            reader.readAsDataURL(e.target.files[0]);
+            reader.readAsDataURL(file);
         };
 
         function updateEditUI() {
@@ -249,8 +261,8 @@
         el('maskPolygon').onpointerdown = (e) => { if(el('freeGrid').checked) handleDown(e, 'freeGrid'); };
         el('guideV').onpointerdown = (e) => handleDown(e, 'gv');
         el('guideH').onpointerdown = (e) => handleDown(e, 'gh');
-        editWs.onmousedown = (e) => { if(e.button === 1) handleDown(e, 'panEdit'); };
-        prevWs.onmousedown = (e) => { if(e.button === 1) handleDown(e, 'panPrev'); };
+        editWs.onpointerdown = (e) => { if (e.button !== 0) return; if (e.target === editWs || e.target === contEdit || e.target.id === 'canvasInput' || e.target.id === 'svgOverlay') handleDown(e, 'panEdit'); };
+        prevWs.onpointerdown = (e) => { if (e.button !== 0) return; if (e.target === prevWs || e.target === contPrev || e.target.id === 'canvasOutput') handleDown(e, 'panPrev'); };
 
         function updatePrevUI() {
             contPrev.style.transform = `translate(${pX}px, ${pY}px) scale(${pScale})`;
@@ -287,37 +299,69 @@
         }
 
         function processImage() {
-            const src = cv.imread(el('canvasInput'));
-            const p = realPoints;
-            
-            // Logic Tỷ lệ Custom
-            let w, h;
-            const rw = parseFloat(el('ratioW').value);
-            const rh = parseFloat(el('ratioH').value);
-
-            if (rw > 0 && rh > 0) {
-                // Nếu có nhập tỷ lệ, lấy giá trị pixel dựa trên CM
-                w = rw * PIXELS_PER_CM;
-                h = rh * PIXELS_PER_CM;
-            } else {
-                // Nếu không, tự tính theo kích thước trung bình các cạnh
-                w = Math.sqrt(Math.hypot(p[1].x-p[0].x, p[1].y-p[0].y) * Math.hypot(p[2].x-p[3].x, p[2].y-p[3].y));
-                h = Math.sqrt(Math.hypot(p[3].x-p[0].x, p[3].y-p[0].y) * Math.hypot(p[2].x-p[1].x, p[2].y-p[1].y));
+            const cvIn = el('canvasInput');
+            if (!isCvReady || typeof cv === 'undefined') {
+                alert('OpenCV chưa tải xong, vui lòng thử lại sau vài giây.');
+                return;
+            }
+            if (!cvIn.width || !cvIn.height || realPoints.length !== 4) {
+                alert('Vui lòng tải ảnh trước khi xử lý.');
+                return;
             }
 
-            const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [p[0].x, p[0].y, p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y]);
-            const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, w, 0, w, h, 0, h]);
-            const M = cv.getPerspectiveTransform(srcTri, dstTri), dst = new cv.Mat();
-            cv.warpPerspective(src, dst, M, new cv.Size(w, h), cv.INTER_LINEAR);
-            cv.imshow('canvasOutput', dst);
-            
-            prevWs.style.display = 'block';
-            pScale = Math.min((prevWs.clientWidth-100)/w, (prevWs.clientHeight-100)/h);
-            pX = (prevWs.clientWidth - w*pScale)/2; pY = (prevWs.clientHeight - h*pScale)/2;
-            updatePrevUI();
-            el('btnDownload').style.display = 'inline-block';
-            setTimeout(() => prevWs.scrollIntoView({ behavior: 'smooth' }), 300);
-            [src, dst, M, srcTri, dstTri].forEach(m => m.delete());
+            const p = realPoints;
+            let src, srcTri, dstTri, M, dst;
+
+            try {
+                // Logic Tỷ lệ Custom
+                let w, h;
+                const ratioWValue = el('ratioW').value.trim();
+                const ratioHValue = el('ratioH').value.trim();
+                const rw = parseFloat(ratioWValue);
+                const rh = parseFloat(ratioHValue);
+
+                if ((ratioWValue && !ratioHValue) || (!ratioWValue && ratioHValue)) {
+                    alert('Vui lòng nhập đủ cả chiều rộng và chiều cao.');
+                    return;
+                }
+
+                if (ratioWValue || ratioHValue) {
+                    if (!(rw > 0 && rh > 0)) {
+                        alert('Tỷ lệ phải là số lớn hơn 0.');
+                        return;
+                    }
+                    // Nếu có nhập tỷ lệ, lấy giá trị pixel dựa trên CM
+                    w = rw * PIXELS_PER_CM;
+                    h = rh * PIXELS_PER_CM;
+                } else {
+                    // Nếu không, tự tính theo kích thước trung bình các cạnh
+                    w = Math.sqrt(Math.hypot(p[1].x-p[0].x, p[1].y-p[0].y) * Math.hypot(p[2].x-p[3].x, p[2].y-p[3].y));
+                    h = Math.sqrt(Math.hypot(p[3].x-p[0].x, p[3].y-p[0].y) * Math.hypot(p[2].x-p[1].x, p[2].y-p[1].y));
+                }
+
+                w = Math.max(1, Math.round(w));
+                h = Math.max(1, Math.round(h));
+
+                src = cv.imread(cvIn);
+                srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [p[0].x, p[0].y, p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y]);
+                dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, w, 0, w, h, 0, h]);
+                M = cv.getPerspectiveTransform(srcTri, dstTri);
+                dst = new cv.Mat();
+                cv.warpPerspective(src, dst, M, new cv.Size(w, h), cv.INTER_LINEAR);
+                cv.imshow('canvasOutput', dst);
+                
+                prevWs.style.display = 'block';
+                pScale = Math.min((prevWs.clientWidth-100)/w, (prevWs.clientHeight-100)/h);
+                pX = (prevWs.clientWidth - w*pScale)/2; pY = (prevWs.clientHeight - h*pScale)/2;
+                updatePrevUI();
+                el('btnDownload').style.display = 'inline-block';
+                setTimeout(() => prevWs.scrollIntoView({ behavior: 'smooth' }), 300);
+            } catch (err) {
+                console.error(err);
+                alert('Có lỗi khi xử lý ảnh. Vui lòng kiểm tra lại ảnh và vùng chọn.');
+            } finally {
+                [src, dst, M, srcTri, dstTri].forEach(m => { if (m && typeof m.delete === 'function') m.delete(); });
+            }
         }
 
         function downloadJPG() {
