@@ -5,6 +5,7 @@
     <title>Perspective Crop Pro - Power v42</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #2c3e50; color: white; margin: 0; padding: 0; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+        body.drag-over::after { content: "Thả ảnh vào đây"; position: fixed; inset: 0; z-index: 5000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); color: #00ff64; font-size: 28px; font-weight: 700; border: 4px dashed #00ff64; pointer-events: none; }
         
         .controls { 
             margin: 0; padding: 7px; background: #34495e;
@@ -276,10 +277,12 @@
         // --- CORE LOGIC ---
         function onOpenCvReady() { isCvReady = true; }
 
-        el('upload').onchange = (e) => {
-            e.target.blur();
-            const file = e.target.files && e.target.files[0];
+        function loadImageFile(file) {
             if (!file) return;
+            if (!file.type || !file.type.startsWith('image/')) {
+                alert('Vui lòng chọn hoặc thả một file ảnh.');
+                return;
+            }
 
             const reader = new FileReader();
             reader.onerror = () => alert('Không thể đọc file ảnh.');
@@ -308,7 +311,26 @@
                 img.src = ev.target.result;
             };
             reader.readAsDataURL(file);
+        }
+
+        el('upload').onchange = (e) => {
+            e.target.blur();
+            loadImageFile(e.target.files && e.target.files[0]);
         };
+
+        ['dragenter', 'dragover'].forEach(type => {
+            window.addEventListener(type, (e) => {
+                e.preventDefault();
+                document.body.classList.add('drag-over');
+            });
+        });
+        ['dragleave', 'drop'].forEach(type => {
+            window.addEventListener(type, (e) => {
+                e.preventDefault();
+                if (type === 'drop') loadImageFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+                document.body.classList.remove('drag-over');
+            });
+        });
 
         function updateEditUI() {
             contEdit.style.transform = `translate(${eX}px, ${eY}px) scale(${eScale})`;
