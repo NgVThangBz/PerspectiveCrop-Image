@@ -7,25 +7,26 @@
         body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #2c3e50; color: white; margin: 0; padding: 0; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
         
         .controls { 
-            margin: 0; padding: 12px; background: #34495e;
-            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
-            min-height: 54px; flex: 0 0 auto; position: sticky; top: 0; z-index: 1000; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            margin: 0; padding: 7px; background: #34495e;
+            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 5px;
+            min-height: 32px; flex: 0 0 auto; position: sticky; top: 0; z-index: 1000; box-shadow: 0 3px 6px rgba(0,0,0,0.3);
         }
-        .controls-left, .controls-right { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+        .controls-left, .controls-right { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
         .controls-right { margin-left: auto; justify-content: flex-end;
         }
         #mainLayout { display: flex; width: 100vw; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+        input[type="file"] { font-size: 11px; max-width: 168px; }
         #workspace { position: relative; flex: 1 1 50%; min-width: 240px; height: 100%; margin: 0; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: block; touch-action: none; }
         #splitter { flex: 0 0 8px; background: #34495e; border-left: 1px solid #607d8b; border-right: 1px solid #607d8b; cursor: col-resize; touch-action: none; }
         #splitter:hover { background: #4d6678; }
 
-        .ratio-group { display: inline-block; border-left: 1px solid #555; padding-left: 15px; margin-left: 10px; }
-        .ratio-input { width: 50px; padding: 5px; border-radius: 4px; border: none; text-align: center; }
-        .mode-group { display: inline-flex; gap: 4px; margin-left: 10px; vertical-align: middle; }
+        .ratio-group { display: inline-block; border-left: 1px solid #555; padding-left: 9px; margin-left: 6px; font-size: 12px; }
+        .ratio-input { width: 32px; padding: 3px; border-radius: 4px; border: none; text-align: center; font-size: 12px; }
+        .mode-group { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; }
         .mode-btn { background: #607d8b; color: white; }
         .mode-btn.active { background: #2ecc71; color: white; }
-        .adjust-group { display: inline-flex; align-items: center; gap: 6px; border-left: 1px solid #555; padding-left: 12px; margin-left: 10px; font-size: 12px; }
-        .adjust-group input[type="range"] { width: 90px; }
+        .adjust-group { display: inline-flex; align-items: center; gap: 4px; border-left: 1px solid #555; padding-left: 7px; margin-left: 6px; font-size: 11px; }
+        .adjust-group input[type="range"] { width: 70px; }
 
         #preview-window { position: relative; flex: 1 1 50%; min-width: 240px; height: 100%; margin: 0; background: #1a1a1a; border: 2px solid #555; overflow: hidden; display: block; touch-action: none; }
         
@@ -58,11 +59,11 @@
         .ruler-h { top: 0; left: 0; right: 0; height: 25px; border-bottom: 1px solid #444; }
         .ruler-v { top: 0; left: 0; bottom: 0; width: 25px; border-right: 1px solid #444; }
 
-        button { padding: 10px 15px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; margin: 2px; transition: opacity 0.2s; }
+        button { padding: 6px 9px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; margin: 1px; transition: opacity 0.2s; font-size: 12px; }
         button:disabled { opacity: 0.3; cursor: not-allowed; }
         .btn-process { background: #2ecc71; color: white; }
         .btn-download { background: #f1c40f; color: #000; }
-        .btn-history { background: #95a5a6; color: white; font-size: 12px; }
+        .btn-history { background: #95a5a6; color: white; font-size: 11px; }
     </style>
 </head>
 <body>
@@ -73,8 +74,8 @@
             <button id="btnRedo" class="btn-history" onclick="redo()" title="Ctrl+Y">↪ Redo</button>
 
             <div class="mode-group">
-                <button id="btnModeQuad" class="mode-btn active" onclick="setPointMode('quad')">Tứ giác</button>
-                <button id="btnModePick" class="mode-btn" onclick="setPointMode('pick')">Pick điểm</button>
+                <button id="btnModeQuad" class="mode-btn" onclick="setPointMode('quad')">Tứ giác</button>
+                <button id="btnModePick" class="mode-btn active" onclick="setPointMode('pick')">Pick điểm</button>
             </div>
             <button class="btn-history" onclick="resetViewAndAdjustments()">Reset</button>
 
@@ -133,7 +134,7 @@
         let eScale = 1, eX = 0, eY = 0;
         let pScale = 1, pX = 0, pY = 0;
         let realPoints = [];
-        let pointMode = 'quad';
+        let pointMode = 'pick';
         let gvPct = 50, ghPct = 50; 
         let activeHandler = null;
         let startMouseX, startMouseY, startObjX, startObjY;
