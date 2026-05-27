@@ -143,6 +143,8 @@
         let pointerMoved = false;
         let activeEdgeIndex = null;
         let outputBaseImageData = null;
+        let isCtrlPressed = false;
+        let activeNodeLockEdge = null;
 
         // --- HỆ THỐNG HISTORY ---
         let history = [];
@@ -263,7 +265,10 @@
             el('btnRedo').disabled = (historyStep >= history.length - 1);
         }
 
+        const isCtrlActive = (e) => Boolean(e && (e.ctrlKey || (e.getModifierState && e.getModifierState('Control')) || isCtrlPressed));
+
         window.addEventListener('keydown', (e) => {
+            isCtrlPressed = e.ctrlKey || e.key === 'Control' || (e.getModifierState && e.getModifierState('Control'));
             const modKey = e.ctrlKey || e.metaKey;
             const key = e.key.toLowerCase();
             const targetTag = (e.target && e.target.tagName || '').toLowerCase();
@@ -273,6 +278,9 @@
             if (modKey && (key === 'y' || (key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return; }
             if (key === 'enter' && (!isTyping || e.target.id === 'upload')) { e.preventDefault(); processImage(); }
         });
+        window.addEventListener('keyup', (e) => { isCtrlPressed = e.ctrlKey || (e.getModifierState && e.getModifierState('Control')); });
+        window.addEventListener('blur', () => { isCtrlPressed = false; });
+        window.addEventListener('contextmenu', (e) => { if (editWs.contains(e.target) || typeof activeHandler === 'number') e.preventDefault(); });
 
         // --- CORE LOGIC ---
         function onOpenCvReady() { isCvReady = true; }
@@ -403,6 +411,41 @@
             realPoints = nextPoints;
         };
 
+        const makeNodeLockEdge = (a, b) => {
+            const pa = startPolygonPoints[a], pb = startPolygonPoints[b];
+            const vx = pb.x - pa.x, vy = pb.y - pa.y;
+            const len = Math.hypot(vx, vy);
+            if (!len) return null;
+            return { a, b, ux: vx / len, uy: vy / len };
+        };
+
+        const chooseNodeLockEdge = (pointIndex, moveX, moveY) => {
+            const count = startPolygonPoints.length;
+            if (count < 3) return null;
+            const prevIndex = (pointIndex + count - 1) % count;
+            const nextIndex = (pointIndex + 1) % count;
+            const prevLock = makeNodeLockEdge(prevIndex, pointIndex);
+            const nextLock = makeNodeLockEdge(pointIndex, nextIndex);
+            if (!prevLock || !nextLock) return null;
+            const prevProjection = Math.abs(moveX * prevLock.ux + moveY * prevLock.uy);
+            const nextProjection = Math.abs(moveX * nextLock.ux + moveY * nextLock.uy);
+            return prevProjection >= nextProjection ? prevLock : nextLock;
+        };
+
+        const movePointAlongLockedEdge = (pointIndex, moveX, moveY) => {
+            if (!activeNodeLockEdge) return null;
+            const projection = moveX * activeNodeLockEdge.ux + moveY * activeNodeLockEdge.uy;
+            const fallback = Math.abs(moveX) >= Math.abs(moveY)
+                ? moveX * (Math.abs(activeNodeLockEdge.ux) > 0.001 ? Math.sign(activeNodeLockEdge.ux) : 1)
+                : moveY * (Math.abs(activeNodeLockEdge.uy) > 0.001 ? Math.sign(activeNodeLockEdge.uy) : 1);
+            const distance = Math.abs(projection) > 0.5 ? projection : fallback;
+            const point = startPolygonPoints[pointIndex];
+            return {
+                x: point.x + activeNodeLockEdge.ux * distance,
+                y: point.y + activeNodeLockEdge.uy * distance
+            };
+        };
+
         function updateMagnifier(e, point) {
             const mag = el('magnifier');
             const srcCanvas = el('canvasInput');
@@ -436,8 +479,10 @@
             pointerMoved = false;
             activeHandler = (typeof type === 'object') ? type.type : type;
             activeEdgeIndex = (typeof type === 'object') ? type.edge : null;
+            activeNodeLockEdge = null;
+            isCtrlPressed = e.ctrlKey || (e.getModifierState && e.getModifierState('Control')) || isCtrlPressed;
             startMouseX = e.clientX; startMouseY = e.clientY;
-            if (typeof type === 'number') { startObjX = realPoints[type].x; startObjY = realPoints[type].y; updateMagnifier(e, realPoints[type]); }
+            if (typeof type === 'number') { startObjX = realPoints[type].x; startObjY = realPoints[type].y; startPolygonPoints = realPoints.map(pt => ({ x: pt.x, y: pt.y })); updateMagnifier(e, realPoints[type]); }
             else if (type === 'gv') { startObjX = gvPct; el('guideV').setPointerCapture(e.pointerId); }
             else if (type === 'gh') { startObjY = ghPct; el('guideH').setPointerCapture(e.pointerId); }
             else if (activeHandler === 'movePolygon' || activeHandler === 'moveEdge') { startPolygonPoints = realPoints.map(pt => ({ x: pt.x, y: pt.y })); }
@@ -445,14 +490,27 @@
             else if (type === 'panPrev') { startObjX = pX; startObjY = pY; }
         };
 
+        const updateDraggedNode = (e) => {
+            const dx = e.clientX - startMouseX, dy = e.clientY - startMouseY;
+            pointerMoved = pointerMoved || Math.abs(dx) > 3 || Math.abs(dy) > 3;
+            const moveX = dx / eScale, moveY = dy / eScale;
+            const ctrlActive = isCtrlActive(e);
+            const freePoint = { x: startObjX + moveX, y: startObjY + moveY };
+            if (ctrlActive && !activeNodeLockEdge) activeNodeLockEdge = chooseNodeLockEdge(activeHandler, moveX, moveY);
+            if (!ctrlActive) activeNodeLockEdge = null;
+            const constrainedPoint = ctrlActive ? movePointAlongLockedEdge(activeHandler, moveX, moveY) : null;
+            realPoints[activeHandler].x = constrainedPoint ? constrainedPoint.x : freePoint.x;
+            realPoints[activeHandler].y = constrainedPoint ? constrainedPoint.y : freePoint.y;
+            updateEditUI();
+            updateMagnifier(e, realPoints[activeHandler]);
+        };
+
         window.onpointermove = (e) => {
             if (activeHandler === null) return;
             const dx = e.clientX - startMouseX, dy = e.clientY - startMouseY;
             pointerMoved = pointerMoved || Math.abs(dx) > 3 || Math.abs(dy) > 3;
             if (typeof activeHandler === 'number') {
-                realPoints[activeHandler].x = startObjX + (dx/eScale); realPoints[activeHandler].y = startObjY + (dy/eScale);
-                updateEditUI();
-                updateMagnifier(e, realPoints[activeHandler]);
+                updateDraggedNode(e);
             } else if (activeHandler === 'movePolygon') {
                 const moveX = dx / eScale, moveY = dy / eScale;
                 realPoints = startPolygonPoints.map(pt => ({ x: pt.x + moveX, y: pt.y + moveY }));
@@ -478,11 +536,25 @@
             }
             activeHandler = null;
             activeEdgeIndex = null;
+            activeNodeLockEdge = null;
             pointerMoved = false;
             hideMagnifier();
         };
 
-        dots.forEach((d, i) => d.onpointerdown = (e) => { if (realPoints[i]) handleDown(e, i); });
+        window.addEventListener('mousemove', (e) => {
+            if (typeof activeHandler !== 'number') return;
+            e.preventDefault();
+            updateDraggedNode(e);
+        });
+        window.addEventListener('mouseup', (e) => {
+            if (typeof activeHandler !== 'number') return;
+            window.onpointerup(e);
+        });
+
+        dots.forEach((d, i) => {
+            d.onpointerdown = (e) => { if (realPoints[i]) handleDown(e, i); };
+            d.onmousedown = (e) => { if (e.ctrlKey && realPoints[i]) { e.preventDefault(); handleDown(e, i); } };
+        });
         el('maskPolygon').onpointerdown = (e) => { if (pointMode === 'pick' && realPoints.length < 4) handleDown(e, 'pickCanvas'); else if (realPoints.length === 4) handleDown(e, 'movePolygon'); };
         el('guideV').onpointerdown = (e) => handleDown(e, 'gv');
         el('guideH').onpointerdown = (e) => handleDown(e, 'gh');
