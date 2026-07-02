@@ -122,7 +122,7 @@
     </div>
     </div>
 
-    <script async src="https://docs.opencv.org/4.5.4/opencv.js" onload="onOpenCvReady()"></script>
+    <script async src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js" onload="onOpenCvReady()"></script>
     <script>
         const el = id => document.getElementById(id);
         const editWs = el('workspace'), prevWs = el('preview-window');
@@ -283,7 +283,13 @@
         window.addEventListener('contextmenu', (e) => { if (editWs.contains(e.target) || typeof activeHandler === 'number') e.preventDefault(); });
 
         // --- CORE LOGIC ---
-        function onOpenCvReady() { isCvReady = true; }
+        function onOpenCvReady() {
+            if (window.cv && typeof window.cv.then === 'function') {
+                window.cv.then(cvModule => { window.cv = cvModule; isCvReady = true; });
+            } else {
+                isCvReady = true;
+            }
+        }
 
         function loadImageFile(file) {
             if (!file) return;
